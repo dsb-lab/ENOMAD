@@ -1,0 +1,10 @@
+LICENCE
+pyproject.toml
+src/pure_nomad/__init__.py
+src/pure_nomad/core.py
+src/pure_nomad.egg-info/PKG-INFO
+src/pure_nomad.egg-info/SOURCES.txt
+src/pure_nomad.egg-info/dependency_links.txt
+src/pure_nomad.egg-info/requires.txt
+src/pure_nomad.egg-info/top_level.txt
+tests/test_.py

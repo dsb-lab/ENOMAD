@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: pure-nomad
+Version: 0.1.0
+Summary: Evolutionary optimizer with NOMAD local search
+Author-email: Miles Churchland <mileschurchand@gmail.com>
+Project-URL: Source, https://github.com/yourname/pure-nomad
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENCE
+Requires-Dist: numpy>=1.23
+Requires-Dist: tqdm>=4.66
+Requires-Dist: pynomadbbo>=4
+Provides-Extra: ray
+Requires-Dist: ray>=2.10; extra == "ray"
+Dynamic: license-file
