@@ -39,7 +39,7 @@ import math
 import numpy as np
 from tqdm import tqdm                      
 import numpy.typing as npt
-from typing import Callable, Tuple, Optional
+from typing import Callable, Tuple, Optional, List
 
 try:
     import ray  # type: ignore
@@ -57,7 +57,7 @@ __all__ = [
 # Helper functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _uniform_crossover(parents: npt.NDArray, probs: npt.NDArray) -> npt.NDArray:
+def _uniform_crossover(parents: npt.NDArray, probs: npt.NDArray, crossover_prob: float) -> npt.NDArray:
     """Vectorised uniform crossover.
 
     Parameters
@@ -74,9 +74,41 @@ def _uniform_crossover(parents: npt.NDArray, probs: npt.NDArray) -> npt.NDArray:
     p2_idx = np.random.choice(P, size=P, p=probs)
 
     p1, p2 = parents[p1_idx], parents[p2_idx]
-    mask = np.random.rand(P, D) < 0.5  # 50‑50 gene swap
+    mask = np.random.rand(P, D) < crossover_prob  # 50‑50 gene swap
     return np.where(mask, p1, p2)
 
+def _fitness_based_crossover(
+    parents: npt.NDArray,
+    fits: npt.NDArray,
+    exponent: float = 1.0,
+) -> npt.NDArray:
+    """Fitness‑biased uniform crossover (vectorised).
+
+    For every offspring we draw two parents *with replacement* using fitness‑
+    proportional selection.  For each gene we then choose which parent's value
+    to keep with probability:
+
+        P(gene←parent₁) = (fit₁ / (fit₁ + fit₂)) ** exponent
+
+    A value of ``exponent > 1`` increases the bias towards the fitter parent;
+    ``exponent = 1`` reduces to the linear case; ``exponent < 1`` makes the
+    bias milder.
+    """
+    P, D = parents.shape
+    probs = fits / fits.sum()
+
+    # choose parents for each offspring ------------------------------------------------
+    p1_idx = np.random.choice(P, size=P, p=probs)
+    p2_idx = np.random.choice(P, size=P, p=probs)
+
+    p1, p2 = parents[p1_idx], parents[p2_idx]
+    f1, f2 = fits[p1_idx], fits[p2_idx]
+
+    # compute per‑offspring bias, then broadcast to all genes -------------------------
+    bias = (f1 / (f1 + f2)) ** exponent               # (P,)
+    mask = np.random.rand(P, D) < bias[:, None]       # (P,D)
+
+    return np.where(mask, p1, p2)
 
 def _random_reset_mutation(pop: npt.NDArray, n_coords: int, low: float, high: float) -> None:
     """In‑place random‑reset mutation on *n_coords* indices per individual."""
@@ -146,7 +178,7 @@ if _RAY_AVAILABLE:
 # Main optimiser class
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PureNOMAD:
+class EVONOMAD:
     """Composable evolutionary optimiser with NOMAD local search.
 
     Parameters
@@ -168,6 +200,7 @@ class PureNOMAD:
 
     def __init__(
         self,
+        optimizer_type: str,
         population_size: int,
         *,
         dimension: int | None = None,
@@ -176,7 +209,9 @@ class PureNOMAD:
         bounds: float = 0.1,
         max_bb_eval: int = 200,
         n_elites: int | None = None,
-        n_mutate_coords: int = 5,
+        n_mutate_coords: int = 0,
+        crossover_type: str = "uniform",
+        crossover_exponent: float = 1.0,
         crossover_rate: float = 0.5,
         init_pop: npt.NDArray | None = None,
         init_vec: npt.NDArray | None = None,
@@ -185,9 +220,10 @@ class PureNOMAD:
         use_ray: bool | None = None,
         seed: int | None = None,
     ) -> None:
+        _valid_crossover = ['uniform','fitness']
+        _valid_optimizer = ['pure','hybrid']
         if (init_pop is None) and (init_vec is None) and dimension is None:
             raise ValueError("Either 'dimension' or 'init_pop' must be provided.")
-
 
         if init_pop and init_vec:
             raise ValueError("Only one of init_pop or init_vec should be given")
@@ -196,8 +232,23 @@ class PureNOMAD:
             if init_pop.ndim < 2:
                 raise ValueError("init_pop should be at least 2 dimensions"\
                                 f"(given: {init_pop.ndim})") 
+        if optimizer_type not in _valid_optimizer:
+            raise ValueError(f"Invalid option provided for crossover_type: {optimizer_type}"\
+                            f" valid options are {_valid_optimizer}")
+
+        if crossover_type not in _valid_crossover:
+            raise ValueError(f"Invalid option provided for crossover_type: {crossover_type}"\
+                             f" valid options are {_valid_crossover}")
+        if crossover_rate < 0 or crossover_rate >= 1:
+            raise ValueError("Crossover rate needs to be between 0 and 1"\
+                             f"was given {crossover_rate}")
+
+
         self.D = (dimension if init_pop is None else init_pop.shape[1]) if init_vec is None else init_vec.shape[0]
+        if not seed:
+            seed = np.random.randint(1, 100001)
         self.rng = np.random.default_rng(seed)
+        np.random.seed(seed)
 
         self.mu = population_size
         # population ----------------------------------------------------
@@ -209,7 +260,11 @@ class PureNOMAD:
             self.pop:npt.NDArray = np.array([init_vec for _ in range(self.mu)])
         else:
             self.pop = self.rng.uniform(low, high, size=(population_size, self.D))
-
+        
+        self.optimizer_type  = optimizer_type
+        self.crossover_type = crossover_type
+        self.init_vec = init_vec
+        self.crossover_exponent = crossover_exponent
         self.obj = objective_fn
         self.subset_size = subset_size
         self.bounds = bounds
@@ -235,14 +290,20 @@ class PureNOMAD:
     def _evaluate_population(self) -> npt.NDArray[np.float64]:
         """Vectorised objective call; returns (μ,) fitness array."""
         return np.asarray([self.obj(ind) for ind in self.pop], dtype=np.float64)
-
+    def _evaluate_individual(self,ind) -> np.float64:
+        """Objective call; returns (μ,) fitness"""
+        return self.obj(ind)
     def _select_parents(self, fits: npt.NDArray[np.float64]) -> Tuple[npt.NDArray, npt.NDArray]:
         idx = np.argsort(fits)[-self.mu // 2:]  # top‑half
         return self.pop[idx], fits[idx]
 
-    def _make_offspring(self, parents: npt.NDArray, parent_fits: npt.NDArray) -> npt.NDArray:
+    def _make_offspring(self, parents: npt.NDArray, parent_fits: npt.NDArray,crossover_prob:float,crossover_expenent:float,crossover_type:str) -> npt.NDArray:
         probs = parent_fits / parent_fits.sum()
-        offspring = _uniform_crossover(parents, probs)
+        if crossover_type =="uniform":
+            offspring = _uniform_crossover(parents, probs,crossover_prob)
+        if crossover_type =="fitness":
+            offspring = _fitness_based_crossover(parents, parent_fits,crossover_expenent)
+        
         _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
         return offspring
 
@@ -272,7 +333,7 @@ class PureNOMAD:
     # Public API
     # ────────────────────────────────────────────────────────────────
 
-    def step(self) -> Tuple[float, npt.NDArray]:
+    def step_pure(self) -> Tuple[float, npt.NDArray]:
         """Run one generation; return best fitness and best vector."""
         fits = self._evaluate_population()
 
@@ -287,17 +348,56 @@ class PureNOMAD:
 
         # produce next generation ------------------------------------
         parents, parent_fits = self._select_parents(fits)
-        offspring = self._make_offspring(parents, parent_fits)
+        offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,self.crossover_exponent,self.crossover_type)
         self.pop = np.vstack([parents, offspring])[: self.mu]
 
+        self.generation += 1
+        return self._best_fit, self._best_x.copy()
+    
+    def step_hybrid(self) -> Tuple[float, npt.NDArray]:
+        """Hybrid GA+NOMAD generation.
+
+        1. Identify individuals that differ sparsely (<50 coords) from the
+           reference vector (`self.base_vec`).  For each *new* sparse mask run
+           NOMAD locally.
+        2. Continue with the usual elite NOMAD + reproduction workflow.
+        """
+        # --- targeted NOMAD on novel sparse masks ------------------------------------
+        record_masks: List[npt.NDArray[np.intp]] = []
+        fits: npt.NDArray[np.float] = np.zeros(self.pop)
+        for i, indiv in enumerate(self.pop):
+            diff_idx = np.where(indiv != self.init_vec)[0]
+            if 0 < diff_idx.size < 50 and not any(np.array_equal(diff_idx, m) for m in record_masks):
+                record_masks.append(diff_idx)
+                x0 = indiv[diff_idx].copy()
+                new_x, new_fit = _nomad_local_search(
+                    self.obj, x0, indiv, diff_idx, self.bounds, self.max_bb_eval
+                )
+                self.pop[i] = new_x
+            else:
+                new_fit = self._evaluate_individual(self.pop[i])
+            fits[i] = new_fit
+
+        # --- rest of evolutionary cycle ----------------------------------------------
+        best_idx = int(np.argmax(fits))
+        if fits[best_idx] > self._best_fit:
+            self._best_fit = float(fits[best_idx])
+            self._best_x = self.pop[best_idx].copy()
+
+        parents, parent_fits = self._select_parents(fits)
+        offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,\
+                                         self.crossover_exponent,self.crossover_type)
+        self.pop = np.vstack([parents, offspring])[: self.mu]
         self.generation += 1
         return self._best_fit, self._best_x.copy()
 
     def run(self, generations: int) -> Tuple[npt.NDArray, float]:
         """Run optimisation for `generations` steps. Return best_x, best_fit."""
+        step_fn = self.step_pure if self.optimizer_type == "pure" else self.step_hybrid
+
         pbar = tqdm(range(generations), desc="Generations", unit="gen")
         for _ in pbar:
-            self.step()
+            self.step_pure()
             # update «postfix» field (appears on the right)
             pbar.set_postfix(best_fit=f"{self._best_fit: .4f}")
 
