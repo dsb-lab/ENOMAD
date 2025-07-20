@@ -2,11 +2,6 @@
 
 **Evo‑NOMAD** is a flexible evolutionary optimizer that couples global search (crossover + mutation) with local, derivative-free refinement via the [NOMAD](https://www.gerad.ca/nomad) solver, exposed through **PyNomad**.
 
-It supports two modes:
-
-* **Pure**: NOMAD refines the top individuals each generation.
-* **Hybrid**: NOMAD selectively targets individuals that differ sparsely from a reference vector (for focused adaptation).
-
 > **Why Evo-NOMAD?**
 > *  **Derivative‑free continuous control** – no action discretisation, no back‑prop through time; handles dense recurrence gracefully.
 > * **Prior‑aware search** – starts from a biological connectome (or any strong prior).

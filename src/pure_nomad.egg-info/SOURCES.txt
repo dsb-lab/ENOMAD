@@ -4,6 +4,10 @@ Readme.md
 pyproject.toml
 src/EVONOMAD/__init__.py
 src/EVONOMAD/core.py
+src/EVONOMAD/__pycache__/__init__.cpython-310.pyc
+src/EVONOMAD/__pycache__/__init__.cpython-312.pyc
+src/EVONOMAD/__pycache__/core.cpython-310.pyc
+src/EVONOMAD/__pycache__/core.cpython-312.pyc
 src/pure_nomad.egg-info/PKG-INFO
 src/pure_nomad.egg-info/SOURCES.txt
 src/pure_nomad.egg-info/dependency_links.txt

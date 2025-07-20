@@ -153,13 +153,11 @@ def _nomad_local_search(
         f"MAX_BB_EVAL {max_bb_eval}",
     ]
     res = PyNomad.optimize(obj, x0.tolist(), lb, ub, opts)
-    #if "Problem with starting point evaluation" in res['stop_reason']:
-    #    raise ValueError('Problem with starting point evaluation, no more points to evaluate',f'bound {bounds}')
     best_slice = np.asarray(res["x_best"], dtype=np.float64)
     if best_slice.size != ind.size:      # NOMAD didn’t return a point
         best_slice = x0                  # keep the original slice
         best_fit   = fitness_fn(full_x)  # evaluate it
-        full_out = full_x.copy()
+        full_out = full_x.copy() ##defensive can be removed
     else:
         best_fit   = -res["f_best"]
         full_out = full_x.copy()
@@ -173,6 +171,9 @@ if _RAY_AVAILABLE:
     @ray.remote(num_cpus=1)
     def _nomad_remote(fn, x0, full_x, ind, bounds, max_bb_eval):  # type: ignore[valid-type]
         return _nomad_local_search(fn, x0, full_x, ind, bounds, max_bb_eval)
+    @ray.remote(num_cpus=1)
+    def _evaluate_individual_remote(obj:Callable,ind):
+        return obj(ind)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main optimiser class
@@ -224,7 +225,8 @@ class EVONOMAD:
         _valid_optimizer = ['pure','hybrid']
         if (init_pop is None) and (init_vec is None) and dimension is None:
             raise ValueError("Either 'dimension' or 'init_pop' must be provided.")
-
+        if subset_size > 49:
+            raise ValueError(f"Subset size must be less than 49 for nomad to work given: {subset_size}")
         if init_pop and init_vec:
             raise ValueError("Only one of init_pop or init_vec should be given")
         
@@ -245,6 +247,7 @@ class EVONOMAD:
 
 
         self.D = (dimension if init_pop is None else init_pop.shape[1]) if init_vec is None else init_vec.shape[0]
+        
         if not seed:
             seed = np.random.randint(1, 100001)
         self.rng = np.random.default_rng(seed)
@@ -261,6 +264,7 @@ class EVONOMAD:
         else:
             self.pop = self.rng.uniform(low, high, size=(population_size, self.D))
         
+        self.population_size = population_size
         self.optimizer_type  = optimizer_type
         self.crossover_type = crossover_type
         self.init_vec = init_vec
@@ -293,6 +297,10 @@ class EVONOMAD:
     def _evaluate_individual(self,ind) -> np.float64:
         """Objective call; returns (μ,) fitness"""
         return self.obj(ind)
+    
+
+
+
     def _select_parents(self, fits: npt.NDArray[np.float64]) -> Tuple[npt.NDArray, npt.NDArray]:
         idx = np.argsort(fits)[-self.mu // 2:]  # top‑half
         return self.pop[idx], fits[idx]
@@ -307,10 +315,9 @@ class EVONOMAD:
         _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
         return offspring
 
-    def _local_search_elites(self, fits: npt.NDArray) -> None:
-        elite_idx = np.argsort(fits)[-self.n_elites:]
+    def _NOMAD_search(self) -> None:
         tasks = []
-        for idx in elite_idx:
+        for idx in range(self.population_size):
             indiv = self.pop[idx]
             slice_idx = self.rng.choice(self.D, self.subset_size, replace=False)
             x0 = indiv[slice_idx].copy()
@@ -321,13 +328,10 @@ class EVONOMAD:
             else:
                 tasks.append(_nomad_local_search(self.obj, x0, indiv, slice_idx,
                                                  self.bounds, self.max_bb_eval))
-        results = ray.get(tasks) if self.use_ray else tasks
-        for new_x, new_fit in results:
-            # replace if improved ----------------------------------
-            if new_fit > fits.mean():
-                worst = np.argmin(fits)
-                self.pop[worst] = new_x
-                fits[worst] = new_fit
+        results = np.array(ray.get(tasks) if self.use_ray else tasks)
+        for i,(x_new, _) in enumerate(results):
+            self.pop[i] = x_new
+
 
     # ────────────────────────────────────────────────────────────────
     # Public API
@@ -343,51 +347,78 @@ class EVONOMAD:
             self._best_fit = float(fits[best_idx])
             self._best_x   = self.pop[best_idx].copy()
 
-        # local NOMAD refinement on elites ----------------------------
-        self._local_search_elites(fits)
+        self._NOMAD_search()
 
         # produce next generation ------------------------------------
         parents, parent_fits = self._select_parents(fits)
         offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,self.crossover_exponent,self.crossover_type)
-        self.pop = np.vstack([parents, offspring])[: self.mu]
+        self.pop = np.vstack([parents, offspring])[: self.mu] ## I think this can be removed ubt its very safe
 
         self.generation += 1
         return self._best_fit, self._best_x.copy()
     
     def step_hybrid(self) -> Tuple[float, npt.NDArray]:
-        """Hybrid GA+NOMAD generation.
+        """Hybrid GA + NOMAD generation (Ray‑parallelisable)."""
 
-        1. Identify individuals that differ sparsely (<50 coords) from the
-           reference vector (`self.base_vec`).  For each *new* sparse mask run
-           NOMAD locally.
-        2. Continue with the usual elite NOMAD + reproduction workflow.
-        """
-        # --- targeted NOMAD on novel sparse masks ------------------------------------
         record_masks: List[npt.NDArray[np.intp]] = []
-        fits: npt.NDArray[np.float] = np.zeros(self.pop)
+        tasks = []           # Ray futures or local results
+        idx_map = []         # original indices so we can put results back
+
+        # -----------------------------------------------------------------
+        # 1.  schedule local searches / fitness calls
+        # -----------------------------------------------------------------
         for i, indiv in enumerate(self.pop):
             diff_idx = np.where(indiv != self.init_vec)[0]
+
             if 0 < diff_idx.size < 50 and not any(np.array_equal(diff_idx, m) for m in record_masks):
+                # novel sparse mask → targeted NOMAD
                 record_masks.append(diff_idx)
                 x0 = indiv[diff_idx].copy()
-                new_x, new_fit = _nomad_local_search(
-                    self.obj, x0, indiv, diff_idx, self.bounds, self.max_bb_eval
-                )
-                self.pop[i] = new_x
-            else:
-                new_fit = self._evaluate_individual(self.pop[i])
-            fits[i] = new_fit
 
-        # --- rest of evolutionary cycle ----------------------------------------------
+                if self.use_ray:
+                    tasks.append(_nomad_remote.remote(
+                        self.obj, x0, indiv, diff_idx, self.bounds, self.max_bb_eval
+                    ))
+                else:
+                    tasks.append(_nomad_local_search(
+                        self.obj, x0, indiv, diff_idx, self.bounds, self.max_bb_eval
+                    ))
+            else:
+                # plain fitness evaluation (no NOMAD)
+                if self.use_ray:
+                    tasks.append(_evaluate_individual_remote.remote(self.obj,indiv))
+                else:
+                    tasks.append(self._evaluate_individual(indiv))
+            idx_map.append(i)
+
+        # -----------------------------------------------------------------
+        # 2.  collect results
+        # -----------------------------------------------------------------
+        results = ray.get(tasks) if self.use_ray else tasks
+        fits = np.empty(self.mu, dtype=float)
+
+        for tgt_idx, res in zip(idx_map, results):
+            if isinstance(res, tuple):           # NOMAD returned (new_x, new_fit)
+                new_x, new_fit = res
+                self.pop[tgt_idx] = new_x
+                fits[tgt_idx] = new_fit
+            else:                                # plain fitness scalar
+                fits[tgt_idx] = res
+
+        # -----------------------------------------------------------------
+        # 3.  evolutionary cycle
+        # -----------------------------------------------------------------
         best_idx = int(np.argmax(fits))
         if fits[best_idx] > self._best_fit:
             self._best_fit = float(fits[best_idx])
             self._best_x = self.pop[best_idx].copy()
 
         parents, parent_fits = self._select_parents(fits)
-        offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,\
-                                         self.crossover_exponent,self.crossover_type)
-        self.pop = np.vstack([parents, offspring])[: self.mu]
+        offspring = self._make_offspring(
+            parents, parent_fits,
+            self.crossover_rate, self.crossover_exponent, self.crossover_type
+        )
+        self.pop = np.vstack([parents, offspring])[: self.mu] ##this could be removed but its very safe 
         self.generation += 1
         return self._best_fit, self._best_x.copy()
 
