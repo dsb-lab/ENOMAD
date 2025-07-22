@@ -5,5 +5,5 @@ try:
 except PackageNotFoundError:   # editable install
     __version__ = "0.0.0+dev"
 
-from .core import EVONOMAD  # re‑expo
-__all__ = ["EVONOMAD"]
+from .core import EANOMAD  # re‑expo
+__all__ = ["EANOMAD"]

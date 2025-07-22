@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for *EVONOMAD*.
+"""Unit tests for *EANOMAD*.
 Run with ``pytest -q``.
 
 The tests are lightweight smoke checks that ensure:
@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from EVONOMAD import EVONOMAD
+from EANOMAD import EANOMAD
 
 # ---------------------------------------------------------------------------
 # Test helper – simple objective
@@ -28,7 +28,7 @@ def sphere(x: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 
 def _run_smoke(optim_type: str):
-    opt = EVONOMAD(
+    opt = EANOMAD(
         optim_type,
         population_size=8,
         dimension=4,
@@ -62,7 +62,7 @@ def test_hybrid_smoke():
 @pytest.mark.parametrize("crossover_type", ["foo", "", None])
 def test_invalid_crossover_type_raises(crossover_type):
     with pytest.raises(ValueError):
-        EVONOMAD(
+        EANOMAD(
             "pure",
             population_size=4,
             dimension=2,
@@ -74,7 +74,7 @@ def test_invalid_crossover_type_raises(crossover_type):
 @pytest.mark.parametrize("crossover_rate", [-0.1, -10, 1.5])
 def test_invalid_crossover_rate_raises(crossover_rate):
     with pytest.raises(ValueError):
-        EVONOMAD(
+        EANOMAD(
             "pure",
             population_size=4,
             dimension=2,
@@ -89,7 +89,7 @@ def test_invalid_crossover_rate_raises(crossover_rate):
 
 def test_seed_reproducibility():
     """Global RNG seeding should make two runs identical."""
-    opt1 = EVONOMAD(
+    opt1 = EANOMAD(
         "hybrid",
         population_size=6,
         dimension=3,
@@ -101,7 +101,7 @@ def test_seed_reproducibility():
     best_x1, best_fit1 = opt1.run(generations=3)
 
    
-    opt2 = EVONOMAD(
+    opt2 = EANOMAD(
         "hybrid",
         population_size=6,
         dimension=3,

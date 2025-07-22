@@ -179,7 +179,7 @@ if _RAY_AVAILABLE:
 # Main optimiser class
 # ─────────────────────────────────────────────────────────────────────────────
 
-class EVONOMAD:
+class EANOMAD:
     """Composable evolutionary optimiser with NOMAD local search. Plz use RAY
     Parameters
     ----------

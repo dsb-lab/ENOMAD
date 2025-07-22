@@ -1,23 +1,26 @@
-# Evo‑NOMAD
+# EA‑NOMAD
 
-**Evo‑NOMAD** is a flexible evolutionary optimizer that couples global search (crossover + mutation) with local, derivative-free refinement via the [NOMAD](https://www.gerad.ca/nomad) solver, exposed through **PyNomad**.
+**EA‑NOMAD** is a flexible evolutionary optimizer that couples global search (crossover + mutation) with local, derivative‑free refinement via the [NOMAD](https://www.gerad.ca/nomad) solver, exposed through **PyNomad**.
 
-> **Why Evo-NOMAD?**
-> *  **Derivative‑free continuous control** – no action discretisation, no back‑prop through time; handles dense recurrence gracefully.
-> * **Prior‑aware search** – starts from a biological connectome (or any strong prior).
->   * **Pure** mode: many tiny edits → minimal drift.
->   * **Hybrid** mode: < 50 edits → structural fidelity.
-> * **Embarrassingly parallel** – flip on Ray to scale linearly with **CPU** cores.
+> **Why EA‑NOMAD?**
+>
+> * **Derivative‑free continuous control** – no action discretisation, no back‑prop through time; handles dense recurrence gracefully.
+> * **Prior‑aware search** – starts from a biological connectome (or any strong prior).
+>
+>   * **Pure** mode: many tiny edits → minimal drift.
+>   * **Hybrid** mode: < 50 edits → structural fidelity.
+> * **Embarrassingly parallel** – flip on Ray to scale linearly with **CPU** cores.
+
 ---
 
 ## Installation
 
 ```bash
-pip install EVO-NOMAD
+pip install EANOMAD
 
 # Development version (clone + editable install)
-git clone https://github.com/greenfire0/Evo-NOMAD.git
-cd Evo-NOMAD
+git clone https://github.com/greenfire0/EA-NOMAD.git
+cd EA-NOMAD
 pip install -e .[ray]  # optional: Ray for parallel NOMAD calls
 ```
 
@@ -29,11 +32,11 @@ pip install -e .[ray]  # optional: Ray for parallel NOMAD calls
 
 ```python
 import numpy as np
-from EVONOMAD import EVONOMAD
+from EANOMAD import EANOMAD
 
 obj = lambda x: -np.sum(x**2)  # maximise => global optimum at x = 0
 
-opt = EVONOMAD(
+opt = EANOMAD(
     "pure",                          # or "hybrid"
     population_size=32,
     dimension=10,
@@ -53,7 +56,7 @@ print(f"Best fitness: {best_fit:.4f}")
 ## API
 
 ```python
-EVONOMAD(
+EANOMAD(
     optimizer_type: Literal["pure", "hybrid"],
     population_size: int,
     dimension: int,
@@ -79,7 +82,7 @@ EVONOMAD(
 
 ## Methods
 
-Evo‑NOMAD offers two training strategies that differ only in *when* and *how* NOMAD is invoked within the evolutionary loop.
+EA‑NOMAD offers two training strategies that differ only in *when* and *how* NOMAD is invoked within the evolutionary loop.
 
 ### Pure mode
 
@@ -141,4 +144,4 @@ MIT License — see `LICENSE` file
 
 * Hi my name is miles, I hope you enjoy these algorithms and optimize some cool shit using them <3
 * [PyNomad](https://github.com/bertsky/pynomad)
-* NOMAD team at Polytechnique Montréal / GERAD
+* NOMAD team at Polytechnique Montréal / GERADmiddlemouse

@@ -3,10 +3,10 @@ requires = ["setuptools>=69", "wheel", "setuptools_scm[toml]>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "EVONOMAD"
-version = "0.1.0"                # or use setuptools‑scm
+name = "EANOMAD"
+version = "0.1.1"                # or use setuptools‑scm
 description = "Evolutionary optimizer with NOMAD local search"
-readme = "README.md"
+readme = {file = "README.md", content-type = "text/markdown"}
 license = {file = "LICENSE"}
 authors = [{name = "Miles Churchland", email = "mileschurchand@gmail.com"}]
 requires-python = ">=3.9"
@@ -18,4 +18,4 @@ dependencies = [
 optional-dependencies.ray = ["ray>=2.10"]   # `pip install pure-nomad[ray]`
 
 [project.urls]
-Source = "https://github.com/greenfire0/EVONOMAD"
+Source = "https://github.com/greenfire0/EANOMAD"
