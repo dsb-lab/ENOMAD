@@ -40,7 +40,7 @@ import numpy as np
 from tqdm import tqdm                      
 import numpy.typing as npt
 from typing import Callable, Tuple, Optional, List
-
+import warnings
 try:
     import ray  # type: ignore
     _RAY_AVAILABLE = True
@@ -180,23 +180,69 @@ if _RAY_AVAILABLE:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class EVONOMAD:
-    """Composable evolutionary optimiser with NOMAD local search.
-
+    """Composable evolutionary optimiser with NOMAD local search. Plz use RAY
     Parameters
     ----------
-    population_size   : number of individuals (μ)
-    dimension         : parameter vector length  *(ignored if `init_pop` given)*
-    objective_fn      : callable `f(x) -> float`, *to be maximised*
-    subset_size       : number of coordinates refined by NOMAD per elite
-    bounds            : ±box around the elite weight slice passed to NOMAD
-    max_bb_eval       : NOMAD budget per call
-    n_elites          : how many top individuals get local optimisation
-    n_mutate_coords   : coordinates mutated per individual (random reset)
-    crossover_rate    : fraction of new population produced via crossover
-    init_pop          : optional initial population array (μ, D)
-    low, high         : range for random initialisation & mutation
-    use_ray           : parallelise NOMAD calls with Ray if available
-    seed              : RNG seed (int or None)
+    optimizer_type : {'pure', 'hybrid'}
+        • **'pure'** – every generation runs NOMAD on *all* individuals  
+        • **'hybrid'** – sparsity‑aware NOMAD + plain fitness evaluations
+
+    population_size : int
+        Number of individuals in the population (μ).
+
+    dimension : int, optional
+        Length of the parameter vector. Ignored if *init_pop* or *init_vec* is supplied.
+
+    objective_fn : Callable[[np.ndarray], float]
+        Objective to **maximise**. Receives a 1‑D parameter array and returns a scalar fitness.
+
+    subset_size : int, default 20
+        Number of coordinates optimised by NOMAD for each selected individual
+        (must be < 50 due to NOMAD’s internal limit).
+
+    bounds : float, default 0.1
+        Half‑width of the ±box constraints passed to NOMAD around the current point.
+
+    max_bb_eval : int, default 200
+        Black‑box evaluation budget per NOMAD call.
+
+    n_elites : int, optional
+        Top‑k individuals refined each generation.  
+        Defaults to ``population_size // 2``.
+
+    n_mutate_coords : int, default 0
+        How many coordinates are replaced by a random value (*random‑reset mutation*)
+        in each offspring.
+
+    crossover_type : {'uniform', 'fitness'}, default 'uniform'
+        • **'uniform'** – classic 50‑50 gene mask  
+        • **'fitness'** – fitness‑biased per‑gene choice (see `crossover_exponent`).
+
+    crossover_exponent : float, default 1.0
+        Strength of the fitness bias when `crossover_type='fitness'`
+        (1 → linear, >1 → sharper bias, <1 → milder).
+
+    crossover_rate : float ∈ [0, 1), default 0.5
+        Fraction of the next generation produced via crossover
+        (the rest comes directly from the elite parents).
+
+    init_pop : np.ndarray, shape (μ, D), optional
+        Explicit initial population. Overrides *dimension*.
+
+    init_vec : np.ndarray, shape (D,), optional
+        Single vector copied μ times to form the initial population.
+        Mutually exclusive with *init_pop*.
+
+    low, high : float, default (-1.0, 1.0)
+        Range for random initialisation and mutation.
+
+    use_ray : bool, optional
+        If **True** and Ray is installed, run NOMAD (and fitness calls in *hybrid* mode)
+        in parallel. Defaults to *auto‑detect Ray*.
+
+    seed : int, optional
+        RNG seed for reproducibility.
+
     """
 
     def __init__(
@@ -328,7 +374,7 @@ class EVONOMAD:
             else:
                 tasks.append(_nomad_local_search(self.obj, x0, indiv, slice_idx,
                                                  self.bounds, self.max_bb_eval))
-        results = np.array(ray.get(tasks) if self.use_ray else tasks)
+        results = (ray.get(tasks) if self.use_ray else tasks)
         for i,(x_new, _) in enumerate(results):
             self.pop[i] = x_new
 
@@ -351,11 +397,17 @@ class EVONOMAD:
 
         # produce next generation ------------------------------------
         parents, parent_fits = self._select_parents(fits)
-        offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,self.crossover_exponent,self.crossover_type)
-        self.pop = np.vstack([parents, offspring])[: self.mu] ## I think this can be removed ubt its very safe
-
+        offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,\
+                                         self.crossover_exponent,self.crossover_type)
+        stack:npt.NDArray = np.vstack([parents, offspring])
+        if self.generation ==0 and stack.shape[0]<self.mu:
+            warnings.warn(f"After crossover the population size({stack.shape[0]}).\n is less than specificied size ({self.mu}) may cause problems with population diversity", category=RuntimeWarning)
+        elif self.generation ==0 and stack.shape[0]>self.mu:
+            warnings.warn(f"After crossover the population size({stack.shape[0]}).\n exceeds specificied size ({self.mu}) will truncate crossover", category=RuntimeWarning)
+        self.pop = stack[: self.mu]
         self.generation += 1
-        return self._best_fit, self._best_x.copy()
+        return self._best_fit, self._best_x.copy() # type: ignore 
+
     
     def step_hybrid(self) -> Tuple[float, npt.NDArray]:
         """Hybrid GA + NOMAD generation (Ray‑parallelisable)."""
@@ -363,7 +415,7 @@ class EVONOMAD:
         record_masks: List[npt.NDArray[np.intp]] = []
         tasks = []           # Ray futures or local results
         idx_map = []         # original indices so we can put results back
-
+        
         # -----------------------------------------------------------------
         # 1.  schedule local searches / fitness calls
         # -----------------------------------------------------------------
@@ -418,22 +470,28 @@ class EVONOMAD:
             parents, parent_fits,
             self.crossover_rate, self.crossover_exponent, self.crossover_type
         )
-        self.pop = np.vstack([parents, offspring])[: self.mu] ##this could be removed but its very safe 
+        _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
+        stack:npt.NDArray = np.vstack([parents, offspring])
+        if self.generation ==0 and stack.shape[0]<self.mu:
+            warnings.warn(f"After crossover the population size({stack.shape[0]}).\n is less than specificied size ({self.mu}). This may cause problems with population diversity", category=RuntimeWarning)
+        elif self.generation ==0 and stack.shape[0]>self.mu:
+            warnings.warn(f"After crossover the population size({stack.shape[0]}).\n exceeds specificied size ({self.mu}). This truncates generated offspring", category=RuntimeWarning)
+        self.pop = stack[: self.mu]
         self.generation += 1
-        return self._best_fit, self._best_x.copy()
+        return self._best_fit, self._best_x.copy() # type: ignore 
 
     def run(self, generations: int) -> Tuple[npt.NDArray, float]:
         """Run optimisation for `generations` steps. Return best_x, best_fit."""
-        step_fn = self.step_pure if self.optimizer_type == "pure" else self.step_hybrid
+        step_fn:Callable = self.step_pure if self.optimizer_type == "pure" else self.step_hybrid
 
         pbar = tqdm(range(generations), desc="Generations", unit="gen")
         for _ in pbar:
-            self.step_pure()
+            step_fn()
             # update «postfix» field (appears on the right)
             pbar.set_postfix(best_fit=f"{self._best_fit: .4f}")
 
         pbar.close()
-        return self._best_x.copy(), self._best_fit
+        return self._best_x.copy(), self._best_fit # type: ignore 
 
     # string representation -----------------------------------------
     def __repr__(self) -> str:  # pragma: no cover

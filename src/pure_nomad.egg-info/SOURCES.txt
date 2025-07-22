@@ -1,5 +1,5 @@
 .gitignore
-LICENCE
+LICENSE
 Readme.md
 pyproject.toml
 src/EVONOMAD/__init__.py

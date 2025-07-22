@@ -90,7 +90,7 @@ def test_invalid_crossover_rate_raises(crossover_rate):
 def test_seed_reproducibility():
     """Global RNG seeding should make two runs identical."""
     opt1 = EVONOMAD(
-        "pure",
+        "hybrid",
         population_size=6,
         dimension=3,
         objective_fn=sphere,
@@ -102,7 +102,7 @@ def test_seed_reproducibility():
 
    
     opt2 = EVONOMAD(
-        "pure",
+        "hybrid",
         population_size=6,
         dimension=3,
         objective_fn=sphere,
