@@ -2,6 +2,8 @@
 LICENSE
 README.md
 pyproject.toml
+dist/eanomad-0.1.0-py3-none-any.whl
+dist/eanomad-0.1.0.tar.gz
 src/EANOMAD/__init__.py
 src/EANOMAD/core.py
 src/EANOMAD.egg-info/PKG-INFO

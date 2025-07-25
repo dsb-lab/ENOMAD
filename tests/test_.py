@@ -48,11 +48,11 @@ def _run_smoke(optim_type: str):
 
 
 def test_pure_smoke():
-    _run_smoke("pure")
+    _run_smoke("EA")
 
 
 def test_hybrid_smoke():
-    _run_smoke("hybrid")
+    _run_smoke("rEA")
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ def test_hybrid_smoke():
 def test_invalid_crossover_type_raises(crossover_type):
     with pytest.raises(ValueError):
         EANOMAD(
-            "pure",
+            "EA",
             population_size=4,
             dimension=2,
             objective_fn=sphere,
@@ -75,7 +75,7 @@ def test_invalid_crossover_type_raises(crossover_type):
 def test_invalid_crossover_rate_raises(crossover_rate):
     with pytest.raises(ValueError):
         EANOMAD(
-            "pure",
+            "EA",
             population_size=4,
             dimension=2,
             objective_fn=sphere,
@@ -90,7 +90,7 @@ def test_invalid_crossover_rate_raises(crossover_rate):
 def test_seed_reproducibility():
     """Global RNG seeding should make two runs identical."""
     opt1 = EANOMAD(
-        "hybrid",
+        "EA",
         population_size=6,
         dimension=3,
         objective_fn=sphere,
@@ -102,7 +102,7 @@ def test_seed_reproducibility():
 
    
     opt2 = EANOMAD(
-        "hybrid",
+        "EA",
         population_size=6,
         dimension=3,
         objective_fn=sphere,

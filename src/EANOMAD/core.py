@@ -50,7 +50,7 @@ except ImportError:  # pragma: no cover
 import PyNomad  # type: ignore
 
 __all__ = [
-    "PureNOMAD",
+    "EANOMAD",
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,15 +127,18 @@ def _nomad_local_search(
     x0: npt.NDArray,                    # starting point (sub‑vector)
     full_x: npt.NDArray,                # full vector (will be copied)
     ind: npt.NDArray[np.intp],          # indices we optimise (1‑D)
-    bounds: float,
     max_bb_eval: int,
+    bounds: float| None = None,
+    lb: list | None = None,
+    ub: list | None = None,
 ) -> Tuple[npt.NDArray, float]:
     """Run NOMAD on the coordinate slice ``ind``.
-
     Returns the updated *full* vector and its fitness.
     """
-    lb = (x0 - bounds).tolist()
-    ub = (x0 + bounds).tolist()
+    if lb is None:
+        lb = (x0 - bounds).tolist()
+    if ub is None:
+        ub = (x0 + bounds).tolist()
 
     def obj(eval_point):
         candidate_edit = []
@@ -169,8 +172,8 @@ def _nomad_local_search(
 if _RAY_AVAILABLE:
     # Ray remote wrapper -----------------------------------------------------
     @ray.remote(num_cpus=1)
-    def _nomad_remote(fn, x0, full_x, ind, bounds, max_bb_eval):  # type: ignore[valid-type]
-        return _nomad_local_search(fn, x0, full_x, ind, bounds, max_bb_eval)
+    def _nomad_remote(fn, x0, full_x, ind, max_bb_eval,bounds=None,lb=None,ub=None):  # type: ignore[valid-type]
+        return _nomad_local_search(fn, x0, full_x, ind, bounds, max_bb_eval,lb,ub)
     @ray.remote(num_cpus=1)
     def _evaluate_individual_remote(obj:Callable,ind):
         return obj(ind)
@@ -183,9 +186,9 @@ class EANOMAD:
     """Composable evolutionary optimiser with NOMAD local search. Plz use RAY
     Parameters
     ----------
-    optimizer_type : {'pure', 'hybrid'}
-        • **'pure'** – every generation runs NOMAD on *all* individuals  
-        • **'hybrid'** – sparsity‑aware NOMAD + plain fitness evaluations
+    optimizer_type : {'EA', 'rEA'}
+        • **'EA'** – every generation runs NOMAD on *all* individuals  
+        • **'rEA'** – sparsity‑aware NOMAD + plain fitness evaluations
 
     population_size : int
         Number of individuals in the population (μ).
@@ -253,22 +256,23 @@ class EANOMAD:
         dimension: int | None = None,
         objective_fn: Callable[[npt.NDArray], float],
         subset_size: int = 20,
-        bounds: float = 0.1,
+        bounds: float | tuple[list,list] = 1.0,
         max_bb_eval: int = 200,
         n_elites: int | None = None,
         n_mutate_coords: int = 0,
         crossover_type: str = "uniform",
         crossover_exponent: float = 1.0,
         crossover_rate: float = 0.5,
+        steps_between_evo: int =1,
         init_pop: npt.NDArray | None = None,
         init_vec: npt.NDArray | None = None,
-        low: float = -1.0,
-        high: float = 1.0,
+        low: float|None = None,
+        high: float|None = None,
         use_ray: bool | None = None,
         seed: int | None = None,
     ) -> None:
         _valid_crossover = ['uniform','fitness']
-        _valid_optimizer = ['pure','hybrid']
+        _valid_optimizer = ['EA','rEA']
         if (init_pop is None) and (init_vec is None) and dimension is None:
             raise ValueError("Either 'dimension' or 'init_pop' must be provided.")
         if subset_size > 49:
@@ -290,10 +294,31 @@ class EANOMAD:
         if crossover_rate < 0 or crossover_rate >= 1:
             raise ValueError("Crossover rate needs to be between 0 and 1"\
                              f"was given {crossover_rate}")
+        if optimizer_type == "rEA" and n_mutate_coords <1:
+            raise ValueError(f"When using rEA you must mutate cords, n_mutate_coords must be >0" \
+                f"{n_mutate_coords}")
+        if isinstance(bounds,Tuple):
+            assert len(bounds[0]) == len(bounds[1]), "The length of the bound's arrays should be equal"
+            assert len(bounds[0]) !=0, "The bounds cannot be empty arrays"
+            self.lb = bounds[0]
+            self.ub = bounds[1]
+            self.bounds = None
+            assert self.lb[0] < self.ub[1], "Lower bound must be lower than upper bound"
+        elif isinstance(bounds,float) or isinstance(bounds,int):
+            self.bounds = bounds
+            self.lb,self.ub = None,None
+        else:
+            raise ValueError("Bounds must be float, int or tuple of lists")
 
 
         self.D = (dimension if init_pop is None else init_pop.shape[1]) if init_vec is None else init_vec.shape[0]
-        
+        if isinstance(self.D,int):
+            if subset_size > self.D:
+                warnings.warn("")
+        else:
+            raise ValueError("Something went wrong with setting dimension please ensure that init_pop\
+                              has shape[1] or init_vec has shape[0] whichever you are using")
+
         if not seed:
             seed = np.random.randint(1, 100001)
         self.rng = np.random.default_rng(seed)
@@ -305,11 +330,44 @@ class EANOMAD:
             if init_pop.shape != (population_size, self.D):
                 raise ValueError("init_pop must have shape (population_size, dimension)")
             self.pop: npt.NDArray = init_pop.copy()
+            if low is None:
+                self.low = np.min(init_pop)
+                if n_mutate_coords > 0:
+                    warnings.warn("low end for random mutations not supplied using\n"\
+                                  "min value of init pop")
+            else:
+                self.low = low
+            if high is None:
+                self.high = np.max(init_pop)
+                if n_mutate_coords > 0:
+                    warnings.warn("low end for random mutations not supplied using\n"\
+                                  "min value of init pop")
+            else:
+                self.high = high
         elif init_vec is not None:
             self.pop:npt.NDArray = np.array([init_vec for _ in range(self.mu)])
+            if low is None:
+                self.low = np.min(init_vec)
+                if n_mutate_coords > 0:
+                    warnings.warn("low end for random mutations not supplied using\n"\
+                                  "min value of init vector")
+            else:
+                self.low = low
+            if high is None:
+                if n_mutate_coords > 0:
+                    warnings.warn("high end for random mutations not supplied using\n"\
+                                  "max value of init vector")
+                self.high = np.max(init_vec)
+            else:
+                self.high = high
         else:
-            self.pop = self.rng.uniform(low, high, size=(population_size, self.D))
+            if high is None:
+                self.high = 1
+            if low is None:
+                self.low = -1
+            self.pop = self.rng.uniform(self.low, self.high, size=(population_size, self.D))
         
+
         self.population_size = population_size
         self.optimizer_type  = optimizer_type
         self.crossover_type = crossover_type
@@ -317,19 +375,19 @@ class EANOMAD:
         self.crossover_exponent = crossover_exponent
         self.obj = objective_fn
         self.subset_size = subset_size
-        self.bounds = bounds
+        self.steps_between_evo = steps_between_evo
         self.max_bb_eval = max_bb_eval
         self.n_elites = n_elites if n_elites is not None else population_size // 2
         self.n_mutate_coords = n_mutate_coords
         self.crossover_rate = crossover_rate
-        self.low, self.high = low, high
+        
         self.use_ray = _RAY_AVAILABLE if use_ray is None else use_ray and _RAY_AVAILABLE
 
         if self.use_ray and not ray.is_initialized():  # pragma: no cover
             ray.init(ignore_reinit_error=True, log_to_driver=False)
 
         # internal bookkeeping -----------------------------------------
-        self.generation = 0
+        self.generation = 1
         self._best_fit = -math.inf
         self._best_x: Optional[npt.NDArray] = None
 
@@ -352,31 +410,39 @@ class EANOMAD:
         return self.pop[idx], fits[idx]
 
     def _make_offspring(self, parents: npt.NDArray, parent_fits: npt.NDArray,crossover_prob:float,crossover_expenent:float,crossover_type:str) -> npt.NDArray:
-        probs = parent_fits / parent_fits.sum()
-        if crossover_type =="uniform":
-            offspring = _uniform_crossover(parents, probs,crossover_prob)
-        if crossover_type =="fitness":
-            offspring = _fitness_based_crossover(parents, parent_fits,crossover_expenent)
-        
+        if parent_fits.sum() ==0 and crossover_type=="fitness" and self.generation==1:
+            warnings.warn("All parent have a fitness sum of 0, fitness based crossover\n"\
+                          " does not work when this is the case (and will be skipped), you can set\n" \
+                          " baseline fitness to be a low value and continue with fitness crossover\n"\
+                          " or switch to uniform crossover")
+        else:
+            probs = parent_fits / parent_fits.sum()
+            if crossover_type =="uniform":
+                offspring = _uniform_crossover(parents, probs,crossover_prob)
+            if crossover_type =="fitness":
+                offspring = _fitness_based_crossover(parents, parent_fits,crossover_expenent)
+            
         _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
         return offspring
 
-    def _NOMAD_search(self) -> None:
+    def _NOMAD_search(self) -> List:
         tasks = []
         for idx in range(self.population_size):
             indiv = self.pop[idx]
             slice_idx = self.rng.choice(self.D, self.subset_size, replace=False)
             x0 = indiv[slice_idx].copy()
             if self.use_ray:
-                tasks.append(_nomad_remote.remote(
-                    self.obj, x0, indiv, slice_idx, self.bounds, self.max_bb_eval
-                ))
+                tasks.append(_nomad_remote.remote(self.obj, x0, indiv, slice_idx,self.max_bb_eval,
+                                                 self.bounds,self.lb,self.ub))
             else:
-                tasks.append(_nomad_local_search(self.obj, x0, indiv, slice_idx,
-                                                 self.bounds, self.max_bb_eval))
+                tasks.append(_nomad_local_search(self.obj, x0, indiv, slice_idx,self.max_bb_eval,
+                                                 self.bounds,self.lb,self.ub))
         results = (ray.get(tasks) if self.use_ray else tasks)
-        for i,(x_new, _) in enumerate(results):
+        pop_fit = np.zeros(self.mu)
+        for i,(x_new, fitness) in enumerate(results):
             self.pop[i] = x_new
+            pop_fit[i] = fitness
+        return pop_fit
 
 
     # ────────────────────────────────────────────────────────────────
@@ -385,7 +451,7 @@ class EANOMAD:
 
     def step_pure(self) -> Tuple[float, npt.NDArray]:
         """Run one generation; return best fitness and best vector."""
-        fits = self._evaluate_population()
+        fits = self._NOMAD_search()
 
         # book‑keep global best ---------------------------------------
         best_idx = np.argmax(fits)
@@ -393,18 +459,20 @@ class EANOMAD:
             self._best_fit = float(fits[best_idx])
             self._best_x   = self.pop[best_idx].copy()
 
-        self._NOMAD_search()
+        if self.generation % self.steps_between_evo==0:
+            # produce next generation ------------------------------------
+            parents, parent_fits = self._select_parents(fits)
+            offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,\
+                                            self.crossover_exponent,self.crossover_type)
+            _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
 
-        # produce next generation ------------------------------------
-        parents, parent_fits = self._select_parents(fits)
-        offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,\
-                                         self.crossover_exponent,self.crossover_type)
-        stack:npt.NDArray = np.vstack([parents, offspring])
-        if self.generation ==0 and stack.shape[0]<self.mu:
-            warnings.warn(f"After crossover the population size({stack.shape[0]}).\n is less than specificied size ({self.mu}) may cause problems with population diversity", category=RuntimeWarning)
-        elif self.generation ==0 and stack.shape[0]>self.mu:
-            warnings.warn(f"After crossover the population size({stack.shape[0]}).\n exceeds specificied size ({self.mu}) will truncate crossover", category=RuntimeWarning)
-        self.pop = stack[: self.mu]
+            stack:npt.NDArray = np.vstack([parents, offspring])
+
+            if self.generation ==1 and stack.shape[0]<self.mu:
+                warnings.warn(f"After crossover the population size({stack.shape[0]}).\n is less than specificied size ({self.mu}) may cause problems with population diversity", category=RuntimeWarning)
+            elif self.generation ==1 and stack.shape[0]>self.mu:
+                warnings.warn(f"After crossover the population size({stack.shape[0]}).\n exceeds specificied size ({self.mu}) will truncate crossover", category=RuntimeWarning)
+            self.pop = stack[: self.mu]
         self.generation += 1
         return self._best_fit, self._best_x.copy() # type: ignore 
 
@@ -429,11 +497,11 @@ class EANOMAD:
 
                 if self.use_ray:
                     tasks.append(_nomad_remote.remote(
-                        self.obj, x0, indiv, diff_idx, self.bounds, self.max_bb_eval
+                        self.obj, x0, indiv, diff_idx, self.bounds, self.max_bb_eval,self.lb,self.ub
                     ))
                 else:
                     tasks.append(_nomad_local_search(
-                        self.obj, x0, indiv, diff_idx, self.bounds, self.max_bb_eval
+                        self.obj, x0, indiv, diff_idx, self.max_bb_eval,self.bounds, self.lb,self.ub
                     ))
             else:
                 # plain fitness evaluation (no NOMAD)
@@ -460,29 +528,30 @@ class EANOMAD:
         # -----------------------------------------------------------------
         # 3.  evolutionary cycle
         # -----------------------------------------------------------------
-        best_idx = int(np.argmax(fits))
-        if fits[best_idx] > self._best_fit:
-            self._best_fit = float(fits[best_idx])
-            self._best_x = self.pop[best_idx].copy()
+        if self.generation % self.steps_between_evo==0:
+            best_idx = int(np.argmax(fits))
+            if fits[best_idx] > self._best_fit:
+                self._best_fit = float(fits[best_idx])
+                self._best_x = self.pop[best_idx].copy()
 
-        parents, parent_fits = self._select_parents(fits)
-        offspring = self._make_offspring(
-            parents, parent_fits,
-            self.crossover_rate, self.crossover_exponent, self.crossover_type
-        )
-        _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
-        stack:npt.NDArray = np.vstack([parents, offspring])
-        if self.generation ==0 and stack.shape[0]<self.mu:
-            warnings.warn(f"After crossover the population size({stack.shape[0]}).\n is less than specificied size ({self.mu}). This may cause problems with population diversity", category=RuntimeWarning)
-        elif self.generation ==0 and stack.shape[0]>self.mu:
-            warnings.warn(f"After crossover the population size({stack.shape[0]}).\n exceeds specificied size ({self.mu}). This truncates generated offspring", category=RuntimeWarning)
-        self.pop = stack[: self.mu]
+            parents, parent_fits = self._select_parents(fits)
+            offspring = self._make_offspring(
+                parents, parent_fits,
+                self.crossover_rate, self.crossover_exponent, self.crossover_type
+            )
+            _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
+            stack:npt.NDArray = np.vstack([parents, offspring])
+            if self.generation ==0 and stack.shape[0]<self.mu:
+                warnings.warn(f"After crossover the population size({stack.shape[0]}).\n is less than specificied size ({self.mu}). This may cause problems with population diversity", category=RuntimeWarning)
+            elif self.generation ==0 and stack.shape[0]>self.mu:
+                warnings.warn(f"After crossover the population size({stack.shape[0]}).\n exceeds specificied size ({self.mu}). This truncates generated offspring", category=RuntimeWarning)
+            self.pop = stack[: self.mu]
         self.generation += 1
         return self._best_fit, self._best_x.copy() # type: ignore 
 
     def run(self, generations: int) -> Tuple[npt.NDArray, float]:
         """Run optimisation for `generations` steps. Return best_x, best_fit."""
-        step_fn:Callable = self.step_pure if self.optimizer_type == "pure" else self.step_hybrid
+        step_fn:Callable = self.step_pure if self.optimizer_type == "EA" else self.step_hybrid
 
         pbar = tqdm(range(generations), desc="Generations", unit="gen")
         for _ in pbar:
