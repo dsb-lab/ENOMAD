@@ -45,8 +45,8 @@ Dynamic: license-file
 > * **Derivative‑free continuous control** – no action discretisation, no back‑prop through time; handles dense recurrence gracefully.
 > * **Prior‑aware search** – starts from a biological connectome (or any strong prior).
 >
->   * **Pure** mode: many tiny edits → minimal drift.
->   * **Hybrid** mode: < 50 edits → structural fidelity.
+>   * **EA** mode: many tiny edits → minimal drift.
+>   * **rEA** mode: < 50 edits → structural fidelity.
 > * **Embarrassingly parallel** – flip on Ray to scale linearly with **CPU** cores.
 
 ---
@@ -68,6 +68,9 @@ pip install -e .[ray]  # optional: Ray for parallel NOMAD calls
 
 ## Quick start
 
+Try EA‑NOMAD instantly in your browser:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1t9taWU-ElAFRCeUPU1YAAzL8VkQepoND?usp=sharing)
 ```python
 import numpy as np
 from EANOMAD import EANOMAD
@@ -75,7 +78,7 @@ from EANOMAD import EANOMAD
 obj = lambda x: -np.sum(x**2)  # maximise => global optimum at x = 0
 
 opt = EANOMAD(
-    "pure",                          # or "hybrid"
+    "EA",                          # or "hybrid"
     population_size=32,
     dimension=10,
     objective_fn=obj,
@@ -95,7 +98,7 @@ print(f"Best fitness: {best_fit:.4f}")
 
 ```python
 EANOMAD(
-    optimizer_type: Literal["pure", "hybrid"],
+    optimizer_type: Literal["EA", "rEA"],
     population_size: int,
     dimension: int,
     objective_fn: Callable[[np.ndarray], float],
@@ -122,7 +125,7 @@ EANOMAD(
 
 EA‑NOMAD offers two training strategies that differ only in *when* and *how* NOMAD is invoked within the evolutionary loop.
 
-### Pure mode
+### EA mode
 
 Every generation, each individual in the population is passed to NOMAD for local refinement:
 
@@ -131,9 +134,9 @@ Every generation, each individual in the population is passed to NOMAD for local
 3. **Replacement** – If the refined individual improves its fitness, it replaces the original.
 4. **Reproduction** – Select the top `n_elites` by fitness, then fill the rest of the population via fitness‑proportional crossover (probability `crossover_rate`) followed by random‑reset mutation (`n_mutate_coords` coordinates).
 
-Pure mode tends to make *many* small synaptic adjustments, keeping the overall L2 distance to the original connectome low while steadily improving reward.
+EA mode tends to make *many* small synaptic adjustments, keeping the overall L2 distance to the original connectome low while steadily improving reward.
 
-### Hybrid mode
+### rEA mode
 
 An evolutionary mutation proposes a *sparse* change‑set first; NOMAD then fine‑tunes only those altered weights:
 
@@ -141,7 +144,7 @@ An evolutionary mutation proposes a *sparse* change‑set first; NOMAD then fine
 2. **Targeted NOMAD** – If the diff mask is novel and < 50 coords, run PyNomad *only* on that mask.
 3. **Evaluation & elitism** – Update fitness, retain best individuals, proceed with crossover/mutation.
 
-Hybrid mode yields comparable rewards to Pure mode while changing *far fewer* synapses – ideal when biological plausibility demands minimal rewiring.
+rEA mode yields comparable rewards to EA mode while changing *far fewer* synapses – ideal when biological plausibility demands minimal rewiring.
 
 Key hyper‑parameters (shared):
 
