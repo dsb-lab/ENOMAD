@@ -12,12 +12,12 @@ Example
 -------
 ```python
 import numpy as np
-from pure_nomad_generic import PureNOMAD
+from EANOMAD import EA
 
 def sphere(x: np.ndarray) -> float:
     return -np.sum(x ** 2)         # maximise ⇒ minimise (–sphere)
 
-opt = PureNOMAD(
+opt = EA(
     population_size=64,
     dimension=30,
     objective_fn=sphere,
@@ -173,7 +173,7 @@ if _RAY_AVAILABLE:
     # Ray remote wrapper -----------------------------------------------------
     @ray.remote(num_cpus=1)
     def _nomad_remote(fn, x0, full_x, ind, max_bb_eval,bounds=None,lb=None,ub=None):  # type: ignore[valid-type]
-        return _nomad_local_search(fn, x0, full_x, ind, bounds, max_bb_eval,lb,ub)
+        return _nomad_local_search(fn, x0, full_x, ind, max_bb_eval,bounds,lb,ub)
     @ray.remote(num_cpus=1)
     def _evaluate_individual_remote(obj:Callable,ind):
         return obj(ind)
