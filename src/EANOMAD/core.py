@@ -141,14 +141,18 @@ def _nomad_local_search(
         ub = (x0 + bounds).tolist()
 
     def obj(eval_point):
-        candidate_edit = []
+        # copy vector and apply slice
         vect = full_x.copy()
-        for a in range(len(ind)):
-                candidate_edit.append(eval_point.get_coord(a))
-        vect[ind] = candidate_edit
-        
-        eval_value = -1*fitness_fn(vect)
-        return eval_value
+        vect[ind] = [eval_point.get_coord(k) for k in range(len(ind))]
+
+        # single sign flip: NOMAD minimizes → we maximize
+        val = -fitness_fn(vect)
+
+        # guarantee a built‑in float and clamp insane values
+        if not math.isfinite(val):
+            val = 1e308          # largest finite double
+        return float(val)
+
 
     opts = [
         "DISPLAY_DEGREE 0",
@@ -258,7 +262,6 @@ class EANOMAD:
         subset_size: int = 20,
         bounds: float | tuple[list,list] = 1.0,
         max_bb_eval: int = 200,
-        n_elites: int | None = None,
         n_mutate_coords: int = 0,
         crossover_type: str = "uniform",
         crossover_exponent: float = 1.0,
@@ -275,8 +278,6 @@ class EANOMAD:
         _valid_optimizer = ['EA','rEA']
         if (init_pop is None) and (init_vec is None) and dimension is None:
             raise ValueError("Either 'dimension' or 'init_pop' must be provided.")
-        if subset_size > 49:
-            raise ValueError(f"Subset size must be less than 49 for nomad to work given: {subset_size}")
         if init_pop and init_vec:
             raise ValueError("Only one of init_pop or init_vec should be given")
         
@@ -297,13 +298,14 @@ class EANOMAD:
         if optimizer_type == "rEA" and n_mutate_coords <1:
             raise ValueError(f"When using rEA you must mutate cords, n_mutate_coords must be >0" \
                 f"{n_mutate_coords}")
-        if isinstance(bounds,Tuple):
-            assert len(bounds[0]) == len(bounds[1]), "The length of the bound's arrays should be equal"
-            assert len(bounds[0]) !=0, "The bounds cannot be empty arrays"
-            self.lb = bounds[0]
-            self.ub = bounds[1]
-            self.bounds = None
-            assert self.lb[0] < self.ub[1], "Lower bound must be lower than upper bound"
+        if isinstance(bounds, tuple):
+            lb, ub = bounds
+            if len(lb) != len(ub):
+                raise ValueError("Lower‑ and upper‑bound arrays must have the same length.")
+            if any(l >= u for l, u in zip(lb, ub)):
+                raise ValueError("Each lower bound must be strictly less than its upper bound.")
+
+            self.lb, self.ub, self.bounds = lb, ub, None
         elif isinstance(bounds,float) or isinstance(bounds,int):
             self.bounds = bounds
             self.lb,self.ub = None,None
@@ -314,11 +316,14 @@ class EANOMAD:
         self.D = (dimension if init_pop is None else init_pop.shape[1]) if init_vec is None else init_vec.shape[0]
         if isinstance(self.D,int):
             if subset_size > self.D:
-                warnings.warn("")
+                subset_size = min(49,self.D) ## 49 for nomads limit
+                warnings.warn(f"subset_size should always be smaller than dimsensions we will automatically set it to the largest size possible ({subset_size})")
         else:
             raise ValueError("Something went wrong with setting dimension please ensure that init_pop\
                               has shape[1] or init_vec has shape[0] whichever you are using")
-
+        if subset_size > 49:
+            raise ValueError(f"Subset size must be less than 49 for nomad to work given: {subset_size}")
+        
         if not seed:
             seed = np.random.randint(1, 100001)
         self.rng = np.random.default_rng(seed)
@@ -363,8 +368,12 @@ class EANOMAD:
         else:
             if high is None:
                 self.high = 1
+            else:
+                self.high = high
             if low is None:
                 self.low = -1
+            else:
+                self.low = low
             self.pop = self.rng.uniform(self.low, self.high, size=(population_size, self.D))
         
 
@@ -377,7 +386,6 @@ class EANOMAD:
         self.subset_size = subset_size
         self.steps_between_evo = steps_between_evo
         self.max_bb_eval = max_bb_eval
-        self.n_elites = n_elites if n_elites is not None else population_size // 2
         self.n_mutate_coords = n_mutate_coords
         self.crossover_rate = crossover_rate
         
@@ -412,14 +420,14 @@ class EANOMAD:
     def _make_offspring(self, parents: npt.NDArray, parent_fits: npt.NDArray,crossover_prob:float,crossover_expenent:float,crossover_type:str) -> npt.NDArray:
         if parent_fits.sum() ==0 and crossover_type=="fitness" and self.generation==1:
             warnings.warn("All parent have a fitness sum of 0, fitness based crossover\n"\
-                          " does not work when this is the case (and will be skipped), you can set\n" \
-                          " baseline fitness to be a low value and continue with fitness crossover\n"\
-                          " or switch to uniform crossover")
-        else:
-            probs = parent_fits / parent_fits.sum()
-            if crossover_type =="uniform":
+                          " does not work when this is the case (and will be skipped)\n" \
+                          " for we will switch to uniform crossover")
+            self.crossover_type="uniform"
+            crossover_type="uniform"
+        probs = parent_fits / parent_fits.sum()
+        if crossover_type =="uniform":
                 offspring = _uniform_crossover(parents, probs,crossover_prob)
-            if crossover_type =="fitness":
+        if crossover_type =="fitness":
                 offspring = _fitness_based_crossover(parents, parent_fits,crossover_expenent)
             
         _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
