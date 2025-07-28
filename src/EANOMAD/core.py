@@ -431,12 +431,14 @@ class EANOMAD:
             indiv = self.pop[idx]
             slice_idx = self.rng.choice(self.D, self.subset_size, replace=False)
             x0 = indiv[slice_idx].copy()
+            lb_slice = [self.lb[i] for i in slice_idx] if self.lb is not None else None
+            ub_slice = [self.ub[i] for i in slice_idx] if self.ub is not None else None
             if self.use_ray:
                 tasks.append(_nomad_remote.remote(self.obj, x0, indiv, slice_idx,self.max_bb_eval,
-                                                 self.bounds,self.lb,self.ub))
+                                                 self.bounds,lb_slice,ub_slice))
             else:
                 tasks.append(_nomad_local_search(self.obj, x0, indiv, slice_idx,self.max_bb_eval,
-                                                 self.bounds,self.lb,self.ub))
+                                                 self.bounds,lb_slice,ub_slice))
         results = (ray.get(tasks) if self.use_ray else tasks)
         pop_fit = np.zeros(self.mu)
         for i,(x_new, fitness) in enumerate(results):
