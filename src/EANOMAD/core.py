@@ -268,7 +268,7 @@ class EANOMAD:
         *,
         dimension: int | None = None,
         objective_fn: Callable[[npt.NDArray], float],
-        subset_size: int = 20,
+        subset_size: int = 49,
         bounds: float | tuple[list,list] = 1.0,
         max_bb_eval: int = 200,
         n_mutate_coords: int = 0,
@@ -431,7 +431,8 @@ class EANOMAD:
             warnings.warn("All parent have a fitness sum of 0, fitness based crossover\n"\
                           " does not work when this is the case (and will be skipped)\n" \
                           " for we will switch to uniform crossover")
-            self.crossover_type="uniform"
+            crossover_type="uniform"
+        if parent_fits.sum() ==0:
             crossover_type="uniform"
         probs = parent_fits / parent_fits.sum()
         if crossover_type =="uniform":
@@ -483,7 +484,6 @@ class EANOMAD:
             parents, parent_fits = self._select_parents(fits)
             offspring = self._make_offspring(parents, parent_fits,self.crossover_rate,\
                                             self.crossover_exponent,self.crossover_type)
-            _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
 
             stack:npt.NDArray = np.vstack([parents, offspring])
 
@@ -547,18 +547,18 @@ class EANOMAD:
         # -----------------------------------------------------------------
         # 3.  evolutionary cycle
         # -----------------------------------------------------------------
-        if self.generation % self.steps_between_evo==0:
-            best_idx = int(np.argmax(fits))
-            if fits[best_idx] > self._best_fit:
+        best_idx = int(np.argmax(fits))
+        if fits[best_idx] > self._best_fit:
                 self._best_fit = float(fits[best_idx])
                 self._best_x = self.pop[best_idx].copy()
+        if self.generation % self.steps_between_evo==0:
+
 
             parents, parent_fits = self._select_parents(fits)
             offspring = self._make_offspring(
                 parents, parent_fits,
                 self.crossover_rate, self.crossover_exponent, self.crossover_type
             )
-            _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
             stack:npt.NDArray = np.vstack([parents, offspring])
             if self.generation ==0 and stack.shape[0]<self.mu:
                 warnings.warn(f"After crossover the population size({stack.shape[0]}).\n is less than specificied size ({self.mu}). This may cause problems with population diversity", category=RuntimeWarning)
