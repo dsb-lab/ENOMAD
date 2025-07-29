@@ -256,3 +256,30 @@ def test_notebook_demo_smoke(demo_problem):
     assert best_fit > -1e+1, (
         f"{jax} benchmark failed: best fitness {best_fit:.4f} not close enough"
     )
+
+
+def huge_but_finite(x: np.ndarray) -> float:
+    """Objective that occasionally returns |fitness| > 32‑bit range."""
+    # alternating sign, magnitude 1e11
+    return 1e11 if np.sum(x) > 0 else -1e11
+
+def test_callback_clamp_prevents_overflow():
+    """EA‑NOMAD should not crash with 'value too large to convert to int'."""
+    opt = EANOMAD(
+        "EA",
+        population_size=8,
+        dimension=4,
+        objective_fn=huge_but_finite,
+        subset_size=4,
+        bounds=1.0,
+        max_bb_eval=50,
+        seed=123,
+        use_ray=False,     # keep it single‑process for the test
+    )
+
+    # just one generation is enough to trigger the callback
+    best_x, best_fit = opt.run(generations=3)
+
+    assert isinstance(best_fit, float)
+    # clamp puts result inside ±2.15e9, so check that
+    assert abs(best_fit) <= 2_147_483_600

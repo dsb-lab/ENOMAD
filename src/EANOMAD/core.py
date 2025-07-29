@@ -121,6 +121,15 @@ def _random_reset_mutation(pop: npt.NDArray, n_coords: int, low: float, high: fl
 # ─────────────────────────────────────────────────────────────────────────────
 # NOMAD wrapper (minimises –fitness)
 # ─────────────────────────────────────────────────────────────────────────────
+# inside EANOMAD.core
+_INT32_MAX = 2_147_483_600          # just under 2³¹‑1
+
+def _safe_float(x) -> float:
+    """Return a finite Python float in the PyNomad‑safe range."""
+    y = float(np.asarray(x).item())          # ndarray / DeviceArray → float
+    if not math.isfinite(y):
+        return math.copysign(_INT32_MAX, y)
+    return max(-_INT32_MAX, min(_INT32_MAX, y))
 
 def _nomad_local_search(
     fitness_fn: Callable[[npt.NDArray], float],
@@ -151,7 +160,7 @@ def _nomad_local_search(
         # guarantee a built‑in float and clamp insane values
         if not math.isfinite(val):
             val = 1e308          # largest finite double
-        return float(val)
+        return _safe_float(val)
 
 
     opts = [
@@ -163,10 +172,10 @@ def _nomad_local_search(
     best_slice = np.asarray(res["x_best"], dtype=np.float64)
     if best_slice.size != ind.size:      # NOMAD didn’t return a point
         best_slice = x0                  # keep the original slice
-        best_fit   = fitness_fn(full_x)  # evaluate it
+        best_fit   = _safe_float(fitness_fn(full_x))  # evaluate it
         full_out = full_x.copy() ##defensive can be removed
     else:
-        best_fit   = -res["f_best"]
+        best_fit   = _safe_float(-res["f_best"])
         full_out = full_x.copy()
         full_out[ind] = best_slice
 
