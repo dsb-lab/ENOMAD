@@ -444,7 +444,7 @@ class EANOMAD:
                           " does not work when this is the case (and will be skipped)\n" \
                           " for we will switch to uniform crossover")
         if parent_fits.sum() ==0:
-            crossover_type="uniform"
+            return parents
         if crossover_type =="uniform":
                 probs = parent_fits / parent_fits.sum()
                 offspring = _uniform_crossover(parents, probs,self.rng,crossover_prob)
