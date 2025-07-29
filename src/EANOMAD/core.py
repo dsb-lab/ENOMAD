@@ -41,8 +41,11 @@ from tqdm import tqdm
 import numpy.typing as npt
 from typing import Callable, Tuple, Optional, List
 import warnings
+from numpy.random import Generator
+
 try:
     import ray  # type: ignore
+    from ray.actor import ActorHandle
     _RAY_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _RAY_AVAILABLE = False
@@ -57,7 +60,7 @@ __all__ = [
 # Helper functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _uniform_crossover(parents: npt.NDArray, probs: npt.NDArray, crossover_prob: float) -> npt.NDArray:
+def _uniform_crossover(parents: npt.NDArray, probs: npt.NDArray, rng: Generator,crossover_prob: float) -> npt.NDArray:
     """Vectorised uniform crossover.
 
     Parameters
@@ -70,17 +73,19 @@ def _uniform_crossover(parents: npt.NDArray, probs: npt.NDArray, crossover_prob:
     offspring : (P, D)  new individuals (same count as parents)
     """
     P, D = parents.shape
-    p1_idx = np.random.choice(P, size=P, p=probs)
-    p2_idx = np.random.choice(P, size=P, p=probs)
+    p1_idx = rng.choice(P, size=P, p=probs)
+    p2_idx = rng.choice(P, size=P, p=probs)
 
     p1, p2 = parents[p1_idx], parents[p2_idx]
-    mask = np.random.rand(P, D) < crossover_prob  # 50‑50 gene swap
+    mask = rng.random((P, D)) < crossover_prob  # 50‑50 gene swap
     return np.where(mask, p1, p2)
 
 def _fitness_based_crossover(
     parents: npt.NDArray,
     fits: npt.NDArray,
+    rng: Generator, 
     exponent: float = 1.0,
+
 ) -> npt.NDArray:
     """Fitness‑biased uniform crossover (vectorised).
 
@@ -98,24 +103,24 @@ def _fitness_based_crossover(
     probs = fits / fits.sum()
 
     # choose parents for each offspring ------------------------------------------------
-    p1_idx = np.random.choice(P, size=P, p=probs)
-    p2_idx = np.random.choice(P, size=P, p=probs)
+    p1_idx = rng.choice(P, size=P, p=probs)
+    p2_idx = rng.choice(P, size=P, p=probs)
 
     p1, p2 = parents[p1_idx], parents[p2_idx]
     f1, f2 = fits[p1_idx], fits[p2_idx]
 
     # compute per‑offspring bias, then broadcast to all genes -------------------------
     bias = (f1 / (f1 + f2)) ** exponent               # (P,)
-    mask = np.random.rand(P, D) < bias[:, None]       # (P,D)
+    mask = rng.random((P, D)) < bias[:, None]       # (P,D)
 
     return np.where(mask, p1, p2)
 
-def _random_reset_mutation(pop: npt.NDArray, n_coords: int, low: float, high: float) -> None:
+def _random_reset_mutation(pop: npt.NDArray, n_coords: int, low: float, high: float, rng: Generator) -> None:
     """In‑place random‑reset mutation on *n_coords* indices per individual."""
     N, D = pop.shape
     for i in range(N):
-        idx = np.random.choice(D, n_coords, replace=False)
-        pop[i, idx] = np.random.uniform(low, high, size=n_coords)
+        idx = rng.choice(D, n_coords, replace=False)
+        pop[i, idx] = rng.uniform(low, high, size=n_coords)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -130,7 +135,7 @@ def _safe_float(x) -> float:
     if not math.isfinite(y):
         return math.copysign(_INT32_MAX, y)
     return max(-_INT32_MAX, min(_INT32_MAX, y))
-
+@staticmethod
 def _nomad_local_search(
     fitness_fn: Callable[[npt.NDArray], float],
     x0: npt.NDArray,                    # starting point (sub‑vector)
@@ -297,7 +302,8 @@ class EANOMAD:
         if optimizer_type not in _valid_optimizer:
             raise ValueError(f"Invalid option provided for crossover_type: {optimizer_type}"\
                             f" valid options are {_valid_optimizer}")
-
+        if optimizer_type == _valid_optimizer[1] and init_vec is None:
+            raise ValueError(f"If you are using {_valid_optimizer[1]} you must pass in an init vector")
         if crossover_type not in _valid_crossover:
             raise ValueError(f"Invalid option provided for crossover_type: {crossover_type}"\
                              f" valid options are {_valid_crossover}")
@@ -326,7 +332,7 @@ class EANOMAD:
         if isinstance(self.D,int):
             if subset_size > self.D:
                 subset_size = min(49,self.D) ## 49 for nomads limit
-                warnings.warn(f"subset_size should always be smaller than dimsensions we will automatically set it to the largest size possible ({subset_size})")
+                raise ValueError(f"subset_size should always be smaller than dimsensions we will automatically set it to the largest size possible ({subset_size})")
         else:
             raise ValueError("Something went wrong with setting dimension please ensure that init_pop\
                               has shape[1] or init_vec has shape[0] whichever you are using")
@@ -336,7 +342,6 @@ class EANOMAD:
         if not seed:
             seed = np.random.randint(1, 100001)
         self.rng = np.random.default_rng(seed)
-        np.random.seed(seed)
 
         self.mu = population_size
         # population ----------------------------------------------------
@@ -392,6 +397,8 @@ class EANOMAD:
         self.init_vec = init_vec
         self.crossover_exponent = crossover_exponent
         self.obj = objective_fn
+        self.fitness_history: dict[str, np.ndarray] | None = None
+        self._last_fits: np.ndarray | None = None
         self.subset_size = subset_size
         self.steps_between_evo = steps_between_evo
         self.max_bb_eval = max_bb_eval
@@ -400,8 +407,13 @@ class EANOMAD:
         
         self.use_ray = _RAY_AVAILABLE if use_ray is None else use_ray and _RAY_AVAILABLE
 
-        if self.use_ray and not ray.is_initialized():  # pragma: no cover
-            ray.init(ignore_reinit_error=True, log_to_driver=False)
+
+        if self.use_ray:
+
+            if not  ray.is_initialized():
+                ray.init(ignore_reinit_error=True, log_to_driver=False)
+            self.obj_actor: ActorHandle[ObjectiveActor] = ObjectiveActor.remote(self.obj)
+
 
         # internal bookkeeping -----------------------------------------
         self.generation = 1
@@ -431,16 +443,15 @@ class EANOMAD:
             warnings.warn("All parent have a fitness sum of 0, fitness based crossover\n"\
                           " does not work when this is the case (and will be skipped)\n" \
                           " for we will switch to uniform crossover")
-            crossover_type="uniform"
         if parent_fits.sum() ==0:
             crossover_type="uniform"
-        probs = parent_fits / parent_fits.sum()
         if crossover_type =="uniform":
-                offspring = _uniform_crossover(parents, probs,crossover_prob)
+                probs = parent_fits / parent_fits.sum()
+                offspring = _uniform_crossover(parents, probs,self.rng,crossover_prob)
         if crossover_type =="fitness":
-                offspring = _fitness_based_crossover(parents, parent_fits,crossover_expenent)
+                offspring = _fitness_based_crossover(parents, parent_fits,self.rng,crossover_expenent)
             
-        _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high)
+        _random_reset_mutation(offspring, self.n_mutate_coords, self.low, self.high,self.rng)
         return offspring
 
     def _NOMAD_search(self) -> List:
@@ -452,8 +463,8 @@ class EANOMAD:
             lb_slice = [self.lb[i] for i in slice_idx] if self.lb is not None else None
             ub_slice = [self.ub[i] for i in slice_idx] if self.ub is not None else None
             if self.use_ray:
-                tasks.append(_nomad_remote.remote(self.obj, x0, indiv, slice_idx,self.max_bb_eval,
-                                                 self.bounds,lb_slice,ub_slice))
+                tasks.append(
+                    self.obj_actor.nomad.remote(x0, indiv, slice_idx, self.max_bb_eval, self.bounds, lb_slice, ub_slice))
             else:
                 tasks.append(_nomad_local_search(self.obj, x0, indiv, slice_idx,self.max_bb_eval,
                                                  self.bounds,lb_slice,ub_slice))
@@ -472,7 +483,7 @@ class EANOMAD:
     def step_pure(self) -> Tuple[float, npt.NDArray]:
         """Run one generation; return best fitness and best vector."""
         fits = self._NOMAD_search()
-
+        self._last_fits = fits
         # book‑keep global best ---------------------------------------
         best_idx = np.argmax(fits)
         if fits[best_idx] > self._best_fit:
@@ -515,9 +526,7 @@ class EANOMAD:
                 x0 = indiv[diff_idx].copy()
 
                 if self.use_ray:
-                    tasks.append(_nomad_remote.remote(
-                        self.obj, x0, indiv, diff_idx, self.bounds, self.max_bb_eval,self.lb,self.ub
-                    ))
+                    tasks.append(self.obj_actor.nomad.remote(x0, indiv, diff_idx, self.max_bb_eval, self.bounds, self.lb, self.ub))
                 else:
                     tasks.append(_nomad_local_search(
                         self.obj, x0, indiv, diff_idx, self.max_bb_eval,self.bounds, self.lb,self.ub
@@ -525,7 +534,7 @@ class EANOMAD:
             else:
                 # plain fitness evaluation (no NOMAD)
                 if self.use_ray:
-                    tasks.append(_evaluate_individual_remote.remote(self.obj,indiv))
+                    tasks.append(self.obj_actor.eval.remote(indiv))
                 else:
                     tasks.append(self._evaluate_individual(indiv))
             idx_map.append(i)
@@ -543,7 +552,7 @@ class EANOMAD:
                 fits[tgt_idx] = new_fit
             else:                                # plain fitness scalar
                 fits[tgt_idx] = res
-
+        self._last_fits = fits
         # -----------------------------------------------------------------
         # 3.  evolutionary cycle
         # -----------------------------------------------------------------
@@ -571,15 +580,25 @@ class EANOMAD:
     def run(self, generations: int) -> Tuple[npt.NDArray, float]:
         """Run optimisation for `generations` steps. Return best_x, best_fit."""
         step_fn:Callable = self.step_pure if self.optimizer_type == "EA" else self.step_hybrid
-
+        means = np.empty(generations, dtype=np.float64)
+        bests = np.empty(generations, dtype=np.float64)
         pbar = tqdm(range(generations), desc="Generations", unit="gen")
-        for _ in pbar:
-            step_fn()
-            # update «postfix» field (appears on the right)
+        for g in pbar:
+            best_fit,_ = step_fn()
+            if self._last_fits is None:
+                raise RuntimeError("Internal error: fits not recorded this generation.")
+            fits = self._last_fits
+            means[g] = float(np.mean(fits))
+            bests[g] = best_fit
             pbar.set_postfix(best_fit=f"{self._best_fit: .4f}")
-
         pbar.close()
+        self.fitness_history = {"mean": means, "best": bests}
+        self.shutdown_ray()
         return self._best_x.copy(), self._best_fit # type: ignore 
+    def shutdown_ray(self) -> None:
+        """Shut down Ray runtime if it was started by this optimizer."""
+        if self.use_ray and ray.is_initialized():
+            ray.shutdown()
 
     # string representation -----------------------------------------
     def __repr__(self) -> str:  # pragma: no cover
@@ -587,3 +606,18 @@ class EANOMAD:
             f"PureNOMAD(mu={self.mu}, D={self.D}, gen={self.generation}, "
             f"best={self._best_fit:.3e})"
         )
+if _RAY_AVAILABLE:
+    @ray.remote
+    class ObjectiveActor:
+        def __init__(self, fn: Callable[[npt.NDArray], float]):
+            self.fn = fn
+
+        def eval(self, x: npt.NDArray) -> float:
+            return self.fn(x)
+
+        def nomad(self, x0, full_x, idx, max_bb_eval, bounds=None, lb=None, ub=None):
+            return self._run_nomad(self.fn, x0, full_x, idx, max_bb_eval, bounds, lb, ub)
+
+        @staticmethod
+        def _run_nomad(fn, x0, full_x, idx, max_bb_eval, bounds, lb, ub):
+            return _nomad_local_search(fn, x0, full_x, idx, max_bb_eval, bounds, lb, ub)

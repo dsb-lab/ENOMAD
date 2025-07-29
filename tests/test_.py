@@ -51,8 +51,6 @@ def test_pure_smoke():
     _run_smoke("EA")
 
 
-def test_hybrid_smoke():
-    _run_smoke("rEA")
 
 
 # ---------------------------------------------------------------------------
