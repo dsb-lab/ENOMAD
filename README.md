@@ -1,8 +1,8 @@
-# EA‑NOMAD
+# ENOMAD
 
-**EA‑NOMAD** is a flexible evolutionary optimizer that couples global search (crossover + mutation) with local, derivative‑free refinement via the [NOMAD](https://www.gerad.ca/nomad) solver, exposed through **PyNomad**.
+**ENOMAD** is a flexible evolutionary optimizer that couples global search (crossover + mutation) with local, derivative‑free refinement via the [NOMAD](https://www.gerad.ca/nomad) solver, exposed through **PyNomad**.
 
-> **Why EA‑NOMAD?**
+> **Why ENOMAD?**
 >
 > * **Derivative‑free continuous control** – no action discretisation, no back‑prop through time; handles dense recurrence gracefully.
 > * **Prior‑aware search** – starts from a biological connectome (or any strong prior).
