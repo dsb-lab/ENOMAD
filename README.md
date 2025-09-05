@@ -145,6 +145,6 @@ MIT License — see `LICENSE` file
 
 ### Acknowledgements
 
-* Hi my name is miles, I hope you enjoy these algorithms and optimize some cool shit using them <3
+* Hi my name is miles, I hope you enjoy these algorithms and optimize some cool stuff using them <3
 * [PyNomad](https://github.com/bertsky/pynomad)
 * NOMAD team at Polytechnique Montréal / GERADmiddlemouse
