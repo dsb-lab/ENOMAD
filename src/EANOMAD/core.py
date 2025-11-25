@@ -158,14 +158,16 @@ def _nomad_local_search(
         # copy vector and apply slice
         vect = full_x.copy()
         vect[ind] = [eval_point.get_coord(k) for k in range(len(ind))]
-
+        
         # single sign flip: NOMAD minimizes → we maximize
         val = -fitness_fn(vect)
 
         # guarantee a built‑in float and clamp insane values
         if not math.isfinite(val):
             val = 1e308          # largest finite double
-        return _safe_float(val)
+        safe_val = _safe_float(val)
+        eval_point.setBBO(str(safe_val).encode('utf-8'))
+        return safe_val
 
 
     opts = [
