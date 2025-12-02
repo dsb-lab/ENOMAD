@@ -157,6 +157,7 @@ def _nomad_local_search(
     def obj(eval_point):
         # copy vector and apply slice
         vect = full_x.copy()
+        #print(vect[ind],[eval_point.get_coord(k) for k in range(len(ind))])
         vect[ind] = [eval_point.get_coord(k) for k in range(len(ind))]
         
         # single sign flip: NOMAD minimizes → we maximize
@@ -165,17 +166,25 @@ def _nomad_local_search(
         # guarantee a built‑in float and clamp insane values
         if not math.isfinite(val):
             val = 1e308          # largest finite double
-        safe_val = _safe_float(val)
-        eval_point.setBBO(str(safe_val).encode('utf-8'))
-        return safe_val
+        eval_point.setBBO(str(val).encode('utf-8'))
+        return _safe_float(val)
 
+
+    def blackbox_block(eval_block):
+        eval_state = []
+        for index in range(eval_block.size()):
+            eval_point = eval_block.get_x(index)
+            eval_state.append(obj(eval_point))
+        return eval_state
 
     opts = [
-        "DISPLAY_DEGREE 0",
-        "DISPLAY_STATS BBE OBJ",
-        f"MAX_BB_EVAL {max_bb_eval}",
+            'DISPLAY_DEGREE 0', 
+            'DISPLAY_STATS BBE BLK_SIZE OBJ', 
+            'BB_MAX_BLOCK_SIZE 4',
+            f'MAX_BB_EVAL {max_bb_eval}'
     ]
-    res = PyNomad.optimize(obj, x0.tolist(), lb, ub, opts)
+
+    res = PyNomad.optimize(blackbox_block, x0.tolist(), lb, ub, opts)
     best_slice = np.asarray(res["x_best"], dtype=np.float64)
     if best_slice.size != ind.size:      # NOMAD didn’t return a point
         best_slice = x0                  # keep the original slice
@@ -185,7 +194,6 @@ def _nomad_local_search(
         best_fit   = _safe_float(-res["f_best"])
         full_out = full_x.copy()
         full_out[ind] = best_slice
-
     return full_out, best_fit
 
 
