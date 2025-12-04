@@ -12,7 +12,7 @@ Example
 -------
 ```python
 import numpy as np
-from EANOMAD import EA
+from ENOMAD import EA
 
 def sphere(x: np.ndarray) -> float:
     return -np.sum(x ** 2)         # maximise ⇒ minimise (–sphere)
@@ -53,7 +53,7 @@ except ImportError:  # pragma: no cover
 import PyNomad  # type: ignore
 
 __all__ = [
-    "EANOMAD",
+    "ENOMAD",
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ def _random_reset_mutation(pop: npt.NDArray, n_coords: int, low: float, high: fl
 # ─────────────────────────────────────────────────────────────────────────────
 # NOMAD wrapper (minimises –fitness)
 # ─────────────────────────────────────────────────────────────────────────────
-# inside EANOMAD.core
+# inside ENOMAD.core
 _INT32_MAX = 2_147_483_600          # just under 2³¹‑1
 
 def _safe_float(x) -> float:
@@ -210,7 +210,7 @@ if _RAY_AVAILABLE:
 # Main optimiser class
 # ─────────────────────────────────────────────────────────────────────────────
 
-class EANOMAD:
+class ENOMAD:
     """Composable evolutionary optimiser with NOMAD local search. Plz use RAY
     Parameters
     ----------

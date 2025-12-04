@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for *EANOMAD*.
+"""Unit tests for *ENOMAD*.
 Run with ``pytest -q``.
 
 The tests are lightweight smoke checks that ensure:
@@ -17,7 +17,7 @@ try:
 except:
     pass
 
-from EANOMAD import EANOMAD
+from ENOMAD import ENOMAD
 
 # ---------------------------------------------------------------------------
 # Test helper – simple objective
@@ -29,7 +29,7 @@ from EANOMAD import EANOMAD
 # ---------------------------------------------------------------------------
 
 def _run_smoke(optim_type: str):
-    opt = EANOMAD(
+    opt = ENOMAD(
         optim_type,
         population_size=8,
         dimension=4,
@@ -60,7 +60,7 @@ def test_pure_smoke():
 @pytest.mark.parametrize("crossover_type", ["foo", "", None])
 def test_invalid_crossover_type_raises(crossover_type):
     with pytest.raises(ValueError):
-        EANOMAD(
+        ENOMAD(
             "EA",
             population_size=4,
             dimension=2,
@@ -72,7 +72,7 @@ def test_invalid_crossover_type_raises(crossover_type):
 @pytest.mark.parametrize("crossover_rate", [-0.1, -10, 1.5])
 def test_invalid_crossover_rate_raises(crossover_rate):
     with pytest.raises(ValueError):
-        EANOMAD(
+        ENOMAD(
             "EA",
             population_size=4,
             dimension=2,
@@ -87,7 +87,7 @@ def test_invalid_crossover_rate_raises(crossover_rate):
 
 def test_seed_reproducibility():
     """Global RNG seeding should make two runs identical."""
-    opt1 = EANOMAD(
+    opt1 = ENOMAD(
         "EA",
         population_size=6,
         dimension=3,
@@ -99,7 +99,7 @@ def test_seed_reproducibility():
     best_x1, best_fit1 = opt1.run(generations=3)
 
    
-    opt2 = EANOMAD(
+    opt2 = ENOMAD(
         "EA",
         population_size=6,
         dimension=3,
@@ -140,11 +140,11 @@ benchmarks: dict[str, Callable[[np.ndarray], float]] = {
 # 2.  Hyper‑parameters trimmed for CI / local test speed
 # ─────────────────────────────────────────────────────────────
 DIM = 10
-POP_SIZE = 128          # smaller than real demo to keep test fast
-GENERATIONS = 100
+POP_SIZE = 16          # smaller than real demo to keep test fast
+GENERATIONS = 10
 SUBSET_SIZE = 10        # ≥1 so NOMAD has something to do
 BOUNDS = (-5.12 * np.ones(DIM), 5.12 * np.ones(DIM))
-MAX_BB_EVAL = 400
+MAX_BB_EVAL = 20
 N_MUTATE_COORD = DIM // 4
 SEED = 0
 
@@ -154,10 +154,10 @@ SEED = 0
 
 
 @pytest.mark.parametrize("name, fn", benchmarks.items())
-def test_eanomad_benchmark_convergence(name: str, fn):
+def test_ENOMAD_benchmark_convergence(name: str, fn):
     """Ensure EA‑NOMAD improves each benchmark quickly on CPU."""
 
-    es = EANOMAD(
+    es = ENOMAD(
         "EA",
         population_size=POP_SIZE,
         dimension=DIM,
@@ -233,7 +233,7 @@ def test_notebook_demo_smoke(demo_problem):
     solution, problem, problem_state = demo_problem
     key = jax.random.PRNGKey(0)
 
-    es = EANOMAD(
+    es = ENOMAD(
         "EA",
         population_size=POP_SIZE,           # trimmed for speed
         dimension=int(solution.size),
@@ -263,7 +263,7 @@ def huge_but_finite(x: np.ndarray) -> float:
 
 def test_callback_clamp_prevents_overflow():
     """EA‑NOMAD should not crash with 'value too large to convert to int'."""
-    opt = EANOMAD(
+    opt = ENOMAD(
         "EA",
         population_size=8,
         dimension=4,

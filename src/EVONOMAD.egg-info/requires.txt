@@ -1,6 +1,0 @@
-numpy>=1.23
-tqdm>=4.66
-pynomadbbo>=4
-
-[ray]
-ray>=2.10

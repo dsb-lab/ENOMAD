@@ -16,11 +16,11 @@
 ## Installation
 
 ```bash
-pip install EANOMAD
+pip install ENOMAD
 
 # Development version (clone + editable install)
-git clone https://github.com/greenfire0/EA-NOMAD.git
-cd EA-NOMAD
+git clone https://github.com/dsb-lab/ENOMAD
+cd ENOMAD
 pip install -e .[ray]  # optional: Ray for parallel NOMAD calls
 ```
 
@@ -30,16 +30,16 @@ pip install -e .[ray]  # optional: Ray for parallel NOMAD calls
 
 ## Quick start
 
-Try EA‑NOMAD instantly in your browser:
+Try ENOMAD instantly in your browser:
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1t9taWU-ElAFRCeUPU1YAAzL8VkQepoND?usp=sharing)
 ```python
 import numpy as np
-from EANOMAD import EANOMAD
+from ENOMAD import ENOMAD
 
 obj = lambda x: -np.sum(x**2)  # maximise => global optimum at x = 0
 
-opt = EANOMAD(
+opt = ENOMAD(
     "EA",                          # or "hybrid"
     population_size=32,
     dimension=10,
@@ -59,7 +59,7 @@ print(f"Best fitness: {best_fit:.4f}")
 ## API
 
 ```python
-EANOMAD(
+ENOMAD(
     optimizer_type: Literal["EA", "rEA"],
     population_size: int,
     dimension: int,
@@ -85,7 +85,7 @@ EANOMAD(
 
 ## Methods
 
-EA‑NOMAD offers two training strategies that differ only in *when* and *how* NOMAD is invoked within the evolutionary loop.
+ENOMAD offers two training strategies that differ only in *when* and *how* NOMAD is invoked within the evolutionary loop.
 
 ### EA mode
 
