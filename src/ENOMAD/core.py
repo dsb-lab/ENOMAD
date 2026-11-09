@@ -302,7 +302,7 @@ class ENOMAD:
         _valid_optimizer = ['EA','rEA']
         if (init_pop is None) and (init_vec is None) and dimension is None:
             raise ValueError("Either 'dimension' or 'init_pop' must be provided.")
-        if init_pop and init_vec:
+        if init_pop is not None and init_vec is not None:
             raise ValueError("Only one of init_pop or init_vec should be given")
         
         if init_pop is not None:
@@ -349,7 +349,7 @@ class ENOMAD:
         if subset_size > 49:
             raise ValueError(f"Subset size must be less than 49 for nomad to work given: {subset_size}")
         
-        if not seed:
+        if seed is None:
             seed = np.random.randint(1, 100001)
         self.rng = np.random.default_rng(seed)
 
